@@ -24,7 +24,6 @@ function uname(len = 10) {
 function clearNames() { used_names.clear(); }
 
 // ── LIGHT MODE ───────────────────────────────────────────────────────────────
-// Mã hoá tất cả string literals bằng XOR 16-byte key
 function lightObfuscate(code) {
   clearNames();
   const KEY_LEN = 16;
@@ -59,8 +58,11 @@ function lightObfuscate(code) {
     `end`,
   ].join('\n');
 
+  // Longest first — tránh string ngắn corrupt string dài có cùng prefix
+  const sortedPairs = [...stringMap.entries()].sort((a, b) => b[0].length - a[0].length);
+
   let newCode = code;
-  for (const [orig, idx] of stringMap) {
+  for (const [orig, idx] of sortedPairs) {
     newCode = newCode.split(orig).join(`${_D}(${idx + 1})`);
   }
 
@@ -68,10 +70,6 @@ function lightObfuscate(code) {
 }
 
 // ── HEAVY MODE ───────────────────────────────────────────────────────────────
-// Triple-key XOR: dk1=32b, dk2=16b, dk3=8b + salt derivation
-// FIX LỖI "attempt to call a nil value":
-//   dùng getfenv(0) để lấy đúng env của executor (Delta, Synapse, Krnl...)
-//   thay vì gọi loadstring trực tiếp (nil trong nhiều môi trường)
 function heavyObfuscate(code) {
   clearNames();
 
@@ -80,13 +78,11 @@ function heavyObfuscate(code) {
   const k3   = crypto.randomBytes(8);
   const salt = crypto.randomBytes(4);
 
-  // Derived keys — khớp chính xác với công thức Lua bên dưới
   const dk1 = Buffer.alloc(32), dk2 = Buffer.alloc(16), dk3 = Buffer.alloc(8);
   for (let i = 0; i < 32; i++) dk1[i] = (k1[i] ^ salt[i % 4] ^ ((i + 1) * 7))  & 0xFF;
   for (let i = 0; i < 16; i++) dk2[i] = (k2[i] ^ salt[i % 4] ^ ((i + 1) * 13)) & 0xFF;
   for (let i = 0; i <  8; i++) dk3[i] = (k3[i] ^ salt[i % 4] ^ ((i + 1) * 31)) & 0xFF;
 
-  // Encrypt
   const raw = Buffer.from(code, 'utf8');
   const enc = Buffer.alloc(raw.length);
   for (let i = 0; i < raw.length; i++) {
@@ -97,18 +93,15 @@ function heavyObfuscate(code) {
     enc[i] = b;
   }
 
-  // Chunk 64 bytes
   const CHUNK = 64;
   const chunks = [];
   for (let i = 0; i < enc.length; i += CHUNK)
     chunks.push([...enc.slice(i, i + CHUNK)].join(','));
 
-  // Random var names
   const V = {
     chunks: uname(), k1r: uname(), k2r: uname(), k3r: uname(),
     salt: uname(), dk1: uname(), dk2: uname(), dk3: uname(),
-    res: uname(), pos: uname(),
-    dec: uname(), fn: uname(), co: uname(), ok: uname(), r: uname(),
+    res: uname(), pos: uname(), dec: uname(), fn: uname(),
     ls: uname(), env: uname(6),
     chunk: uname(6), i: uname(4), j: uname(4), b: uname(4),
   };
@@ -140,21 +133,21 @@ function heavyObfuscate(code) {
     `local ${V.dec}=table.concat(${V.res})`,
     `${V.res}=nil ${V.chunks}=nil`,
     `${V.dk1}=nil ${V.dk2}=nil ${V.dk3}=nil`,
+    `-- Resolve loadstring từ executor env (Delta/Synapse/Krnl)`,
     `local ${V.env}=getfenv and getfenv(0) or _G`,
     `local ${V.ls}=${V.env}.loadstring or ${V.env}.load or loadstring or load`,
     `if not ${V.ls} then ${V.ls}=rawget(${V.env},"loadstring") or rawget(${V.env},"load") end`,
     `if not ${V.ls} then return end`,
-    `local ${V.fn},${V.r}=${V.ls}(${V.dec})`,
+    `local ${V.fn}=${V.ls}(${V.dec})`,
     `${V.dec}=nil`,
     `if not ${V.fn} then return end`,
-    `local ${V.co}=coroutine.create(${V.fn})`,
-    `local ${V.ok},${V.r}=coroutine.resume(${V.co})`,
-    `if ${V.ok} then return ${V.r} end`,
+    `-- Inject executor env vào decoded fn để loadstring/game/... hoạt động bên trong`,
+    `if setfenv then pcall(setfenv,${V.fn},${V.env}) end`,
+    `return ${V.fn}()`,
   ].join('\n');
 }
 
 // ── DUMP MODE ────────────────────────────────────────────────────────────────
-// format: 'hex' (xxd-style) | 'base64' | 'escaped' (Lua octal)
 function dumpCode(code, format = 'hex') {
   const raw = Buffer.from(code, 'utf8');
 
@@ -173,7 +166,7 @@ function dumpCode(code, format = 'hex') {
     ].join('\n');
   }
 
-  // hex mặc định — offset + hex + ascii như xxd
+  // hex — xxd style: offset + hex + ascii
   const lines = [`-- [[ Orange Hub Dump ]] size=${raw.length} bytes`];
   for (let i = 0; i < raw.length; i += 16) {
     const slice = raw.slice(i, i + 16);
