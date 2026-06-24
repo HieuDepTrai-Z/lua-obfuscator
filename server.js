@@ -1,299 +1,289 @@
 const express = require('express');
 const multer = require('multer');
-const { execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const packer = require('./obfuscator/packer');
 
 const app = express();
 const upload = multer({ dest: 'uploads/' });
 
 app.use(express.static('public'));
-app.use(express.json());
+app.use(express.json({ limit: '5mb' }));
 
-const GLOBAL_KEYWORDS = [
-  'game', 'workspace', 'Players', 'ReplicatedStorage', 'Lighting',
-  'task', 'spawn', 'delay', 'wait', 'tick', 'time', 'elapsedTime',
-  'Instance', 'TweenService', 'Color3', 'Vector2', 'Vector3', 'UDim2', 'UDim',
-  'CFrame', 'Enum', 'math', 'os', 'table', 'string', 'coroutine',
-  'pcall', 'xpcall', 'require', 'loadstring', 'getgenv', 'getfenv', 'setfenv',
-  'rawget', 'rawset', 'rawequal', 'rawlen',
-  'Networking', 'CollectionService', 'PlayerStateClient',
-  'RaycastParams', 'Random', 'ColorSequence', 'ColorSequenceKeypoint',
-  'Faces', 'Axes', 'BrickColor', 'CatalogSearchParams', 'DebuggerManager',
-  'NumberRange', 'NumberSequence', 'NumberSequenceKeypoint',
-  'OverlapParams', 'Path', 'PathWaypoint', 'PhysicalProperties',
-  'Random', 'Ray', 'RaycastParams', 'Rect', 'Region3',
-  'Region3int16', 'SharedTable', 'TweenInfo', 'UDim', 'UDim2',
-  'Vector2', 'Vector3', 'Vector3int16', 'DateTime', 'DockWidgetPluginGui',
-  'Faces', 'Axes', 'BrickColor', 'CatalogSearchParams'
-];
+// ─── Danh sách global Roblox cần bảo toàn ───────────────────────────────────
+const ROBLOX_GLOBALS = new Set([
+  'game','workspace','script','plugin','shared',
+  'Players','ReplicatedStorage','ReplicatedFirst','ServerStorage','ServerScriptService',
+  'Lighting','StarterGui','StarterPack','StarterPlayer','Teams','SoundService',
+  'RunService','TweenService','UserInputService','ContextActionService','PathfindingService',
+  'CollectionService','HttpService','MarketplaceService','BadgeService','DataStoreService',
+  'task','spawn','delay','wait','tick','time','elapsedTime','os','math','table','string',
+  'coroutine','bit32','utf8','select','pairs','ipairs','next','pcall','xpcall',
+  'require','loadstring','rawget','rawset','rawequal','rawlen','setmetatable','getmetatable',
+  'tostring','tonumber','type','typeof','assert','error','warn','print','unpack',
+  'Instance','Enum','CFrame','Vector2','Vector3','Vector3int16','UDim','UDim2',
+  'Color3','BrickColor','Ray','RaycastParams','OverlapParams','Region3','Region3int16',
+  'NumberRange','NumberSequence','NumberSequenceKeypoint','ColorSequence','ColorSequenceKeypoint',
+  'TweenInfo','PhysicalProperties','Rect','Random','DateTime','Axes','Faces',
+  'getgenv','getsenv','getfenv','setfenv','hookfunction','hookfunc','newcclosure',
+  'checkcaller','iscclosure','islclosure','debug','getrenv','getreg',
+  'Networking','PlayerStateClient','SharedTable','_G','_ENV',
+  'true','false','nil','and','or','not','do','end','if','then','else','elseif',
+  'for','while','repeat','until','return','break','local','function','in'
+]);
 
-function lightObfuscate(code) {
-  const keyByte = crypto.randomBytes(1).readUInt8(0);
-  const strings = [];
-  const stringRegex = /(["'])(?:(?=(\\?))\2.)*?\1/g;
-  let match;
-  while ((match = stringRegex.exec(code)) !== null) strings.push(match[0]);
-  const unique = [...new Set(strings)];
-  const allMappings = {};
-  let idx = 1;
-  const stringMap = new Map();
-  unique.forEach(s => {
-    const content = s.slice(1, -1);
-    if (content.length <= 4) {
-      const enc = [...content].map(c => String.fromCharCode(c.charCodeAt(0) ^ keyByte)).join('');
-      allMappings[idx] = enc;
-      stringMap.set(s, { idx });
-      idx++;
-    } else {
-      const chunks = [];
-      for (let i = 0; i < content.length; i += 4) chunks.push(content.substring(i, i + 4));
-      const idxes = [];
-      chunks.forEach(chunk => {
-        const enc = [...chunk].map(c => String.fromCharCode(c.charCodeAt(0) ^ keyByte)).join('');
-        allMappings[idx] = enc;
-        idxes.push(idx);
-        idx++;
-      });
-      stringMap.set(s, { idxes });
-    }
-  });
-
-  const usedGlobals = [];
-  for (const kw of GLOBAL_KEYWORDS) {
-    const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (new RegExp('\\b' + escaped + '\\b', 'g').test(code)) usedGlobals.push(kw);
-  }
-  const globalMap = {};
-  usedGlobals.forEach(kw => {
-    const enc = [...kw].map(c => String.fromCharCode(c.charCodeAt(0) ^ keyByte)).join('');
-    allMappings[idx] = enc;
-    globalMap[kw] = idx;
-    idx++;
-  });
-
-  let tableCode = 'local _S={}\n';
-  for (const [i, enc] of Object.entries(allMappings)) {
-    tableCode += `_S[${i}]="${enc}"\n`;
-  }
-
-  let newCode = code;
-  for (const [orig, info] of stringMap) {
-    if (info.idx) {
-      const repl = `(_S[${info.idx}]:gsub(".",function(c)return string.char(string.byte(c)~${keyByte})end))`;
-      newCode = newCode.split(orig).join(repl);
-    } else {
-      const repl = '(' + info.idxes.map(i => `(_S[${i}]:gsub(".",function(c)return string.char(string.byte(c)~${keyByte})end))`).join('..') + ')';
-      newCode = newCode.split(orig).join(repl);
-    }
-  }
-
-  for (const [kw, idx] of Object.entries(globalMap).sort((a,b) => b[0].length - a[0].length)) {
-    const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const regex = new RegExp('\\b' + escaped + '\\b', 'g');
-    newCode = newCode.replace(regex, `_G[_S[${idx}]:gsub(".",function(c)return string.char(string.byte(c)~${keyByte})end())]`);
-  }
-
-  const localDeclRegex = /local\s+(?:function\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\b/g;
-  const declaredLocals = new Set();
-  let declMatch;
-  while ((declMatch = localDeclRegex.exec(newCode)) !== null) declaredLocals.add(declMatch[1]);
-  const renameMap = {};
-  const alphabet = 'abcdefghijklmnopqrstuvwxyz';
-  for (const name of declaredLocals) {
-    let newName;
-    do {
-      newName = Array.from({length: 10 + Math.floor(Math.random() * 6)}, () => alphabet[Math.floor(Math.random() * 26)]).join('');
-    } while (Object.values(renameMap).includes(newName) || GLOBAL_KEYWORDS.includes(newName));
-    renameMap[name] = newName;
-  }
-  for (const [oldName, newName] of Object.entries(renameMap)) {
-    const escaped = oldName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    newCode = newCode.replace(new RegExp('\\b' + escaped + '\\b', 'g'), newName);
-  }
-
-  const antiDebug = `
-local __dbg = debug
-if __dbg then
- __dbg.setmetatable = nil
- __dbg.getmetatable = nil
- __dbg.getfenv = nil
- __dbg.setfenv = nil
- __dbg.getinfo = nil
- __dbg.getlocal = nil
- __dbg.setlocal = nil
- __dbg.getupvalue = nil
- __dbg.setupvalue = nil
- __dbg.sethook = function() end
- __dbg.gethook = function() end
-end
-local __hook = hookfunction or hookfunc
-if __hook then
- __hook(print, function() end)
- __hook(warn, function() end)
- __hook(error, function() end)
-end
-`;
-  return antiDebug + tableCode + '\n' + newCode + '\n-- Junk: ' + Math.random().toString(36).substring(2,10);
+// ─── Helper ──────────────────────────────────────────────────────────────────
+function randName(len = 12) {
+  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  // bắt đầu bằng chữ thường để tránh conflict
+  let s = chars[Math.floor(Math.random() * 26)];
+  for (let i = 1; i < len; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  return s;
 }
 
-function heavyObfuscate(code) {
-  if (!/\bgame\b/i.test(code)) {
-    const tmpFile = path.join(__dirname, 'uploads', `temp_${Date.now()}.lua`);
-    const outFile = tmpFile + '.out';
-    fs.writeFileSync(tmpFile, code);
-    try {
-      try { execFileSync('luajit', ['-b', '-s', tmpFile, outFile], { timeout: 5000 }); }
-      catch { execFileSync('luac5.1', ['-s', '-o', outFile, tmpFile], { timeout: 5000 }); }
-      const bytecode = fs.readFileSync(outFile);
-      const buf = Buffer.from(bytecode);
-      const paddingLength = (4 - (buf.length % 4)) % 4;
-      const padded = Buffer.concat([buf, Buffer.alloc(paddingLength)]);
-      const encoded = packer.encode(padded);
-      const checksum = crypto.createHash('sha256').update(encoded).digest('hex').substring(0,8);
-      const finalData = checksum + encoded;
-      const loader = `return(function(...)
-local function B(S)
- local b,l,uc,f=string.byte,string.sub,bit32.bxor,math.floor
- S=l(S,9)
- S=l(S,'z','!!!!!'):gsub('[%s\r\n]','')
- local R={}
- local j=1
- while j<=#S do
-  local L=#S-j+1
-  local Y=(L>=5)and 5 or L
-  local RS=0
-  if Y==5 then
-   local Y,U,lc,pS,Lj=b(S,j,j+4)
-   RS=(Y-33)*0x31C84B1+(U-33)*0x95EED+(lc-33)*0x1C39+(pS-33)*0x55+(Lj-33)
-  else
-   for k=0,Y-1 do RS=RS*0x55+(b(S,j+k)-33) end
-   for k=1,5-Y do RS=RS*0x55+0x54 end
-  end
-  local yr=f(RS/0x1000000)%0x100
-  local nh=f(RS/0x10000)%0x100
-  local lc=f(RS/0x100)%0x100
-  local rb=RS%0x100
-  if Y==5 then R[#R+1]=string.char(yr,nh,lc,rb)
-  else
-   if Y>=2 then R[#R+1]=string.char(yr) end
-   if Y>=3 then R[#R+1]=string.char(nh) end
-   if Y>=4 then R[#R+1]=string.char(lc) end
-  end
-  j=j+Y
- end
- return table.concat(R)
-end
-local S=[[${finalData}]]
-if #S<9 then return end
-local h=string.sub(S,1,8)
-if h~="${checksum}" then return end
-local d=debug
-if d then
- d.setmetatable=nil; d.getmetatable=nil; d.getfenv=nil; d.setfenv=nil
- d.getinfo=nil; d.getlocal=nil; d.setlocal=nil; d.getupvalue=nil; d.setupvalue=nil
- d.sethook=function()end; d.gethook=function()end
-end
-local raw=setmetatable({},{__index=function()end,__newindex=function()end,__metatable="locked"})
-local f=loadstring(B(S))
-if not f then return end
-local env={}
-setmetatable(env,{__index=_G,__newindex=function()end})
-local co=coroutine.create(f)
-local ok,res=coroutine.resume(co,env)
-if ok then return res end
-return nil
-end)()`;
-      return loader;
-    } catch (err) {
-      throw new Error('Compilation failed: ' + err.message);
-    } finally {
-      try { fs.unlinkSync(tmpFile); fs.unlinkSync(outFile); } catch(e) {}
-    }
+function randInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function xorBytes(buf, key) {
+  const out = Buffer.alloc(buf.length);
+  for (let i = 0; i < buf.length; i++) out[i] = buf[i] ^ key[i % key.length];
+  return out;
+}
+
+// Encode bytes → Lua string literal an toàn (escape tất cả)
+function toLuaByteString(buf) {
+  let s = '"';
+  for (let i = 0; i < buf.length; i++) {
+    s += '\\' + buf[i];
+  }
+  s += '"';
+  return s;
+}
+
+// Key array → Lua table literal
+function toLuaKeyTable(buf) {
+  return '{' + [...buf].join(',') + '}';
+}
+
+// ─── LIGHT MODE ──────────────────────────────────────────────────────────────
+// XOR với key 4 bytes (mạnh hơn 1 byte), chia string thành chunks
+// rename local vars, string pool
+function lightObfuscate(code) {
+  const KEY_LEN = 8;
+  const key = crypto.randomBytes(KEY_LEN);
+
+  // 1. Thu thập tất cả string literals
+  const stringMap = new Map(); // original → pool index
+  const pool = []; // mảng encoded strings
+  let poolIdx = 0;
+
+  const strRegex = /(["'])(?:(?=(\\?))\2[\s\S])*?\1/g;
+  let m;
+  const foundStrings = new Set();
+  while ((m = strRegex.exec(code)) !== null) foundStrings.add(m[0]);
+
+  for (const orig of foundStrings) {
+    const inner = orig.slice(1, -1)
+      .replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r')
+      .replace(/\\\\/g, '\\').replace(/\\"/g, '"').replace(/\\'/g, "'");
+    const encBuf = Buffer.alloc(inner.length);
+    for (let i = 0; i < inner.length; i++)
+      encBuf[i] = inner.charCodeAt(i) ^ key[i % KEY_LEN];
+    const encArr = [...encBuf].join(',');
+    stringMap.set(orig, poolIdx);
+    pool.push(encArr);
+    poolIdx++;
   }
 
-  // ---------- Roblox heavy mode (table of bytes, no base64) ----------
-  const key1 = crypto.randomBytes(16);
-  const key2 = crypto.randomBytes(8);
-  const key3 = crypto.randomBytes(4);
+  // 2. Tên biến pool & key
+  const _P = randName(), _K = randName(), _D = randName();
 
-  const buf1 = Buffer.alloc(code.length);
-  for (let i = 0; i < code.length; i++) buf1[i] = code.charCodeAt(i) ^ key1[i % 16];
-  const buf2 = Buffer.alloc(buf1.length);
-  for (let i = 0; i < buf1.length; i++) buf2[i] = buf1[i] ^ key2[i % 8];
-  const buf3 = Buffer.alloc(buf2.length);
-  for (let i = 0; i < buf2.length; i++) buf3[i] = buf2[i] ^ key3[i % 4];
+  // 3. Tạo pool code
+  let poolCode = `local ${_K}={${[...key].join(',')}}\n`;
+  poolCode += `local ${_P}={`;
+  poolCode += pool.map(e => `{${e}}`).join(',');
+  poolCode += `}\n`;
+  // Hàm decode
+  poolCode += `local function ${_D}(i)local t=${_P}[i]local r={}for j=1,#t do r[j]=string.char(t[j]~${_K}[(j-1)%${KEY_LEN}+1])end return table.concat(r)end\n`;
 
-  const dataBytes = [...buf3]; // mảng số nguyên 0-255
-  const dataStr = '{' + dataBytes.join(',') + '}';
+  // 4. Thay thế strings trong code
+  let newCode = code;
+  for (const [orig, idx] of stringMap) {
+    newCode = newCode.split(orig).join(`${_D}(${idx + 1})`);
+  }
 
-  const k1 = [...key1], k2 = [...key2], k3 = [...key3];
+  // 5. Rename local variables (không rename globals Roblox)
+  const localRe = /\blocal\s+(?:function\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\b/g;
+  const declared = new Set();
+  let dm;
+  while ((dm = localRe.exec(newCode)) !== null) {
+    if (!ROBLOX_GLOBALS.has(dm[1])) declared.add(dm[1]);
+  }
+  const renameMap = {};
+  const used = new Set([_P, _K, _D]);
+  for (const name of declared) {
+    let n;
+    do { n = randName(randInt(8, 14)); } while (used.has(n));
+    renameMap[name] = n;
+    used.add(n);
+  }
+  // Sort by length desc để tránh partial replace
+  const sorted = Object.entries(renameMap).sort((a, b) => b[0].length - a[0].length);
+  for (const [oldN, newN] of sorted) {
+    const esc = oldN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    newCode = newCode.replace(new RegExp('\\b' + esc + '\\b', 'g'), newN);
+  }
 
-  const loader = `
-return(function(...)
-local __b, __c, __f, __bx = string.byte, string.char, math.floor, bit32.bxor
+  // 6. Junk code nhẹ
+  const junk = `local ${randName()}=math.floor(math.random()*${randInt(100,999)})if false then end\n`;
 
-local __data = ${dataStr}
-local __k1 = {${k1.join(',')}}
-local __k2 = {${k2.join(',')}}
-local __k3 = {${k3.join(',')}}
+  return `-- Obfuscated by Orange Hub Obfuscator\n${junk}${poolCode}\n${newCode}`;
+}
 
-local __len = #__data
-local __a = {}
-for i = 1, __len do __a[i] = __data[i] end
+// ─── HEAVY MODE (Roblox-compatible) ─────────────────────────────────────────
+// Triple-layer XOR, key derivation động, chunked decode (không dùng table.unpack)
+// để tránh stack overflow với script lớn
+function heavyObfuscate(code) {
+  // Layer 1: key 32 bytes
+  const k1 = crypto.randomBytes(32);
+  // Layer 2: key 16 bytes
+  const k2 = crypto.randomBytes(16);
+  // Layer 3: key 8 bytes  
+  const k3 = crypto.randomBytes(8);
+  // Salt cho key derivation
+  const salt = crypto.randomBytes(4);
 
-for i = 1, __len do __a[i] = __a[i] ~ __k3[(i-1)%4+1] end
-for i = 1, __len do __a[i] = __a[i] ~ __k2[(i-1)%8+1] end
-for i = 1, __len do __a[i] = __a[i] ~ __k1[(i-1)%16+1] end
+  // Encode code → bytes
+  let buf = Buffer.from(code, 'utf8');
+  // Áp dụng 3 lớp XOR
+  buf = xorBytes(buf, k3);
+  buf = xorBytes(buf, k2);
+  buf = xorBytes(buf, k1);
 
-local __dec = __c(table.unpack(__a))
+  // Chia thành chunks 80 bytes mỗi chunk → tránh stack overflow
+  const CHUNK = 80;
+  const chunks = [];
+  for (let i = 0; i < buf.length; i += CHUNK) {
+    chunks.push([...buf.slice(i, i + CHUNK)].join(','));
+  }
 
--- Anti-debug & junk -----------------------------------------------
-local __dbg = debug
+  // Checksum đơn giản: XOR tất cả bytes
+  let checksum = 0;
+  for (let i = 0; i < buf.length; i++) checksum = (checksum ^ buf[i]) & 0xFF;
+
+  // Tên biến random
+  const _chunks = randName(), _k1 = randName(), _k2 = randName(), _k3 = randName();
+  const _salt = randName(), _dec = randName(), _res = randName();
+  const _i = randName(4), _j = randName(4), _b = randName(4);
+  const _cs = randName(), _fn = randName(), _co = randName();
+  const _ok = randName(4), _r = randName(4);
+
+  // Key derivation: trộn salt vào key lúc runtime
+  // k_final[i] = k[i] XOR salt[i%4] XOR (i*7 & 0xFF)
+  const saltArr = [...salt];
+
+  const luaChunks = chunks.map(c => `{${c}}`).join(',\n');
+
+  const loader = `-- Obfuscated by Orange Hub Obfuscator
+local ${_chunks}={
+${luaChunks}
+}
+local ${_k1}_raw={${[...k1].join(',')}}
+local ${_k2}_raw={${[...k2].join(',')}}
+local ${_k3}_raw={${[...k3].join(',')}}
+local ${_salt}={${saltArr.join(',')}}
+
+-- Key derivation động
+local ${_k1}={}
+for ${_i}=1,#${_k1}_raw do
+  ${_k1}[${_i}]=(${_k1}_raw[${_i}]~${_salt}[(${_i}-1)%4+1]~((${_i}*7)%256))%256
+end
+local ${_k2}={}
+for ${_i}=1,#${_k2}_raw do
+  ${_k2}[${_i}]=(${_k2}_raw[${_i}]~${_salt}[(${_i}-1)%4+1]~((${_i}*13)%256))%256
+end
+local ${_k3}={}
+for ${_i}=1,#${_k3}_raw do
+  ${_k3}[${_i}]=(${_k3}_raw[${_i}]~${_salt}[(${_i}-1)%4+1]~((${_i}*31)%256))%256
+end
+
+-- Decode từng chunk, tránh table.unpack (stack overflow)
+local ${_res}={}
+local ${_b}=0
+for ${_i}=1,#${_chunks} do
+  local chunk=${_chunks}[${_i}]
+  for ${_j}=1,#chunk do
+    ${_b}=${_b}+1
+    local byte=chunk[${_j}]
+    -- layer 3 reverse
+    byte=byte~${_k3}[(${_b}-1)%8+1]
+    -- layer 2 reverse  
+    byte=byte~${_k2}[(${_b}-1)%16+1]
+    -- layer 1 reverse
+    byte=byte~${_k1}[(${_b}-1)%32+1]
+    ${_res}[${_b}]=string.char(byte)
+  end
+end
+
+-- Verify checksum
+local ${_cs}=0
+for ${_i}=1,#${_res} do
+  ${_cs}=(${_cs}~string.byte(${_res}[${_i}]))%256
+end
+if ${_cs}~=${checksum} then return end
+
+local ${_dec}=table.concat(${_res})
+${_res}=nil
+
+-- Anti-debug (Roblox safe)
+local __dbg=debug
 if __dbg then
- __dbg.setmetatable = nil; __dbg.getmetatable = nil; __dbg.getfenv = nil
- __dbg.setfenv = nil; __dbg.getinfo = nil; __dbg.getlocal = nil
- __dbg.setlocal = nil; __dbg.getupvalue = nil; __dbg.setupvalue = nil
- __dbg.sethook = function() end; __dbg.gethook = function() end
-end
-local __hk = hookfunction or hookfunc
-if __hk then
- __hk(print, function() end)
- __hk(warn, function() end)
- __hk(error, function() end)
+  __dbg.sethook=function()end
+  __dbg.getinfo=nil
+  __dbg.getlocal=nil
+  __dbg.setlocal=nil
+  __dbg.getupvalue=nil
+  __dbg.setupvalue=nil
 end
 
-local __j1 = 0; for i = 1, 150 do __j1 = __j1 + i end; if __j1 ~= 11325 then return end
-local __j2 = {}; for i = 1, 10 do __j2[i] = math.random() end; __j2 = nil
-local __j3 = 0; repeat __j3 = __j3 + 1 until __j3 > 10
+-- Junk loops
+local ${randName(5)}=0
+for ${_i}=1,100 do ${randName(4)}=_i end
+local ${randName(6)}=math.huge
+if ${randName(6)}~=math.huge then return end
 
-local __f, __err = loadstring(__dec)
-if not __f then return nil end
-local __env = {}
-setmetatable(__env, {__index = _G, __newindex = function() end})
-local __co = coroutine.create(__f)
-local __ok, __res = coroutine.resume(__co, __env)
-if __ok then return __res end
-return nil
-end)()`;
+local ${_fn},__err=loadstring(${_dec})
+if not ${_fn} then return end
+${_dec}=nil
+
+-- Wrap trong coroutine để catch lỗi
+local ${_co}=coroutine.create(${_fn})
+local ${_ok},${_r}=coroutine.resume(${_co})
+if ${_ok} then return ${_r} end
+`;
 
   return loader;
 }
 
+// ─── API ─────────────────────────────────────────────────────────────────────
 app.post('/obfuscate', upload.single('file'), (req, res) => {
   try {
     let code = '';
     if (req.file) {
       code = fs.readFileSync(req.file.path, 'utf8');
       fs.unlinkSync(req.file.path);
-    } else if (req.body.code) {
+    } else if (req.body && req.body.code) {
       code = req.body.code;
     } else {
-      return res.status(400).json({error: 'No code'});
+      return res.status(400).json({ error: 'No code provided' });
     }
-    const mode = req.body.mode || 'light';
+
+    if (code.length > 500000) {
+      return res.status(400).json({ error: 'Code too large (max 500KB)' });
+    }
+
+    const mode = (req.body && req.body.mode) || 'light';
     let result;
     if (mode === 'heavy') {
       result = heavyObfuscate(code);
@@ -306,5 +296,8 @@ app.post('/obfuscate', upload.single('file'), (req, res) => {
   }
 });
 
+// Tạo thư mục uploads nếu chưa có
+if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log('Running on ' + PORT));
+app.listen(PORT, () => console.log('Running on port ' + PORT));
