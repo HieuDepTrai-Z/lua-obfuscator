@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lua Obfuscator Pro</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      background: #0a0a0a;
+      font-family: 'Courier New', monospace;
+      color: #00ff41;
+      padding: 2rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      background-image: radial-gradient(#003300 1px, transparent 1px);
+      background-size: 40px 40px;
+    }
+    h1 {
+      font-size: 2.5rem;
+      text-shadow: 0 0 10px #00ff41, 0 0 20px #00ff41;
+      margin-bottom: 0.5rem;
+      letter-spacing: 2px;
+    }
+    .container {
+      width: 100%;
+      max-width: 1000px;
+      background: #111;
+      border: 1px solid #00ff41;
+      border-radius: 8px;
+      padding: 2rem;
+      box-shadow: 0 0 25px rgba(0,255,65,0.2);
+      margin-top: 2rem;
+    }
+    .row {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+    }
+    .col {
+      flex: 1;
+      min-width: 250px;
+    }
+    textarea {
+      width: 100%;
+      height: 400px;
+      background: #0a0a0a;
+      border: 1px solid #00ff41;
+      color: #00ff41;
+      padding: 1rem;
+      font-family: 'Courier New', monospace;
+      font-size: 14px;
+      resize: vertical;
+      border-radius: 4px;
+      outline: none;
+    }
+    textarea:focus {
+      box-shadow: 0 0 15px #00ff41;
+    }
+    .output-area {
+      background: #000;
+      border: 1px solid #00ff41;
+      color: #00ff41;
+      padding: 1rem;
+      height: 400px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+    .controls {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+      margin: 1.5rem 0;
+      flex-wrap: wrap;
+    }
+    button, .file-label {
+      background: transparent;
+      border: 1px solid #00ff41;
+      color: #00ff41;
+      padding: 10px 20px;
+      font-family: 'Courier New', monospace;
+      font-size: 16px;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: all 0.2s;
+    }
+    button:hover, .file-label:hover {
+      background: #00ff41;
+      color: #0a0a0a;
+      box-shadow: 0 0 20px #00ff41;
+    }
+    #fileInput {
+      display: none;
+    }
+    select {
+      background: #0a0a0a;
+      border: 1px solid #00ff41;
+      color: #00ff41;
+      padding: 10px;
+      font-family: 'Courier New', monospace;
+      border-radius: 4px;
+      font-size: 16px;
+    }
+    .copy-btn {
+      background: #003300;
+    }
+    .status {
+      font-size: 14px;
+      margin-top: 0.5rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>Lua Obfuscator</h1>
+  <div class="container">
+    <div class="row">
+      <div class="col">
+        <textarea id="codeInput" placeholder="Paste Lua code here..."></textarea>
+        <div class="controls">
+          <label for="fileInput" class="file-label">Upload .lua / .txt</label>
+          <input type="file" id="fileInput" accept=".lua,.txt">
+          <select id="modeSelect">
+            <option value="light">Light Obfuscation</option>
+            <option value="heavy" selected>Heavy + Anti-Debug</option>
+          </select>
+          <button onclick="obfuscate()">OBFUSCATE</button>
+        </div>
+        <div id="status" class="status"></div>
+      </div>
+      <div class="col">
+        <div id="result" class="output-area">Output will appear here...</div>
+        <div style="margin-top:1rem; display:flex; gap:1rem; justify-content:flex-end;">
+          <button class="copy-btn" onclick="copyResult()">Copy to Clipboard</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    async function obfuscate() {
+      const code = document.getElementById('codeInput').value;
+      const fileInput = document.getElementById('fileInput');
+      const mode = document.getElementById('modeSelect').value;
+      const resultEl = document.getElementById('result');
+      const statusEl = document.getElementById('status');
+      statusEl.textContent = 'Processing...';
+      resultEl.textContent = '';
+      const formData = new FormData();
+      if (fileInput.files.length > 0) {
+        formData.append('file', fileInput.files[0]);
+      } else if (code.trim() !== '') {
+        formData.append('code', code);
+      } else {
+        statusEl.textContent = 'Error: Provide code or a file.';
+        return;
+      }
+      formData.append('mode', mode);
+      try {
+        const response = await fetch('/obfuscate', { method: 'POST', body: formData });
+        const data = await response.json();
+        if (data.error) {
+          statusEl.textContent = 'Error: ' + data.error;
+          resultEl.textContent = data.error;
+        } else {
+          statusEl.textContent = 'Obfuscation successful!';
+          resultEl.textContent = data.obfuscated;
+        }
+      } catch (err) {
+        statusEl.textContent = 'Network error: ' + err.message;
+      }
+    }
+    function copyResult() {
+      const resultEl = document.getElementById('result');
+      navigator.clipboard.writeText(resultEl.textContent).then(() => {
+        alert('Copied!');
+      });
+    }
+  </script>
+</body>
+</html>
