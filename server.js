@@ -46,7 +46,7 @@ function lightObfuscate(code) {
   }
 
   const _K = uname(), _P = uname(), _D = uname();
-  let out = `-- [[ Delete Obfuscator ]]\n`;
+  let out = `-- [[ Delete Hub Obfuscator ]]\n`;
   out += `local ${_K}={${[...key].join(',')}}\n`;
   out += `local ${_P}={${pool.map(e=>`{${e}}`).join(',')}}\n`;
   out += `local function ${_D}(i)local t=${_P}[i]local r={}for j=1,#t do r[j]=string.char(t[j]~${_K}[(j-1)%${KEY_LEN}+1])end return table.concat(r)end\n`;
@@ -110,8 +110,7 @@ function heavyObfuscate(code) {
     chunk: uname(6), i: uname(4), j: uname(4), b: uname(4),
     // VM vars
     vm: uname(), env: uname(), exec: uname(),
-    // Anti-hook vars
-    orig_ls: uname(), ls_key: uname(), ls_hash: uname(),
+    // Anti-hook vars (removed)
     jA: uname(5), jB: uname(5), jC: uname(5),
   };
 
@@ -122,7 +121,7 @@ function heavyObfuscate(code) {
   const luaChunks = chunks.map(c=>`{${c}}`).join(',');
 
   const loader =
-`-- [[ Orange Hub Obfuscator ]]
+`-- [[ Delete Hub Obfuscator ]]
 local ${V.chunks}={${luaChunks}}
 local ${V.k1r}={${[...k1].join(',')}}
 local ${V.k2r}={${[...k2].join(',')}}
@@ -159,20 +158,9 @@ for ${V.i}=1,100 do ${V.jA}=${V.jA}+${V.i} end
 if ${V.jA}~=5050 then return end
 local ${V.jB}=math.floor(math.sqrt(144))
 if ${V.jB}~=12 then return end
-local ${V.jC}=string.len("OrangeHub")
+local ${V.jC}=string.len("DeleteHub")
 if ${V.jC}~=9 then return end
-local ${V.orig_ls}=loadstring
-local ${V.ls_key}=tostring(${V.orig_ls})
-local ${V.fn},${V.r}
-if ${V.ls_key} and #${V.ls_key}>0 then
-  local ${V.ok},${V.co}=pcall(${V.orig_ls},${V.dec})
-  if ${V.ok} and type(${V.co})=="function" then
-    ${V.fn}=${V.co}
-  end
-end
-if not ${V.fn} then
-  ${V.fn}=load and load(${V.dec})
-end
+local ${V.fn}=(loadstring or load)(${V.dec})
 if not ${V.fn} then return end
 ${V.dec}=nil
 local ${V.co}=coroutine.create(${V.fn})
