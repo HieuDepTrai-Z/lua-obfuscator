@@ -86,18 +86,18 @@
 <header>
   <div class="logo">🥀</div>
   <h1>Orange Hub <span>Obfuscator</span></h1>
-  <div class="badge">EagleObfuscator</div>
+  <div class="badge">Prometheus</div>
 </header>
 <main>
   <div class="info-bar" id="infoBar">
-    <b>Obfuscator By Hieu</b>
+    <b>Obfuscator By Hieu</b> — Powered by Prometheus
   </div>
   <div class="controls">
     <select class="preset-select" id="presetSelect" onchange="updateInfo()">
-      <option value="Basic">Basic</option>
-      <option value="Chaotic Good">Chaotic Good</option>
-      <option value="Chaotic Evil" selected>Chaotic Evil</option>
-      <option value="Dystropic">Dystropic [ Strongest ]</option>
+      <option value="Minify">Minify — Nhỏ gọn</option>
+      <option value="Weak">Weak — Nhẹ</option>
+      <option value="Medium" selected>Medium — Trung bình</option>
+      <option value="Strong">Strong — Mạnh nhất</option>
     </select>
     <button class="upload-btn" onclick="document.getElementById('fileInput').click()">Upload .lua</button>
     <input type="file" id="fileInput" accept=".lua,.txt" onchange="loadFile(this)">
@@ -129,15 +129,15 @@
 </main>
 <script>
 const presetInfo = {
-  'Basic': '<b>Basic</b> — Minify + String encoding. Nhanh, nhẹ.',
-  'Chaotic Good': '<b>Chaotic Good</b> — CFF + MBA + Literals. Trung bình.',
-  'Chaotic Evil': '<b>Chaotic Evil</b> — CFF + MBA + String enc + Table Indirection + EncFunc + DecSwizzle. Mạnh.',
-  'Dystropic': '<b>Dystropic</b> — Tất cả features + JunkIf + ReverseIf. Mạnh nhất, chậm hơn.',
+  'Minify': '<b>Minify</b> — Chỉ thu nhỏ code, không obfuscate. Nhanh nhất.',
+  'Weak':   '<b>Weak</b> — Obfuscate nhẹ, vẫn có thể đọc được.',
+  'Medium': '<b>Medium</b> — Obfuscate trung bình. Khuyến nghị.',
+  'Strong': '<b>Strong</b> — Obfuscate mạnh nhất, khó deobf nhất.',
 };
 
 function updateInfo() {
   const preset = document.getElementById('presetSelect').value;
-  document.getElementById('infoBar').innerHTML = presetInfo[preset] + ' — Powered by eagle_obfuscator';
+  document.getElementById('infoBar').innerHTML = presetInfo[preset] + ' — Powered by Prometheus';
 }
 
 function loadFile(input) {
@@ -175,7 +175,6 @@ async function obfuscate() {
   document.getElementById('elapsed').textContent = '—';
   const t0 = Date.now();
 
-  // Loading steps animation
   const steps = ['Uploading script...','Parsing code...','Applying obfuscation...','Encrypting strings...','Finalizing output...'];
   let stepIdx = 0;
   setStatus('loading', steps[stepIdx++]);
@@ -183,16 +182,14 @@ async function obfuscate() {
     if (stepIdx < steps.length) setStatus('loading', steps[stepIdx++]);
   }, 700);
 
-  // Chạy fetch và delay song song, lấy cái nào xong sau
-  let res;
   try {
-    [res] = await Promise.all([
+    const [res] = await Promise.all([
       fetch('/obfuscate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code, preset })
       }),
-      new Promise(r => setTimeout(r, 3000))
+      new Promise(r => setTimeout(r, 2000))
     ]);
     clearInterval(stepInterval);
     const data = await res.json();
