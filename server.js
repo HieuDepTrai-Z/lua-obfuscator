@@ -16,27 +16,27 @@ const LUA_BIN = process.env.LUA_BIN || 'lua5.1';
 
 // Whitelist preset hợp lệ — chặn command injection
 const ALLOWED_PRESETS = ['Minify', 'Weak', 'Medium', 'Strong'];
-
 function obfuscate(code, preset = 'Medium') {
   if (!ALLOWED_PRESETS.includes(preset)) {
     throw new Error(`Invalid preset "${preset}". Allowed: ${ALLOWED_PRESETS.join(', ')}`);
   }
 
   const id = randomUUID();
-  const inputFile = path.join('uploads', `${id}_in.lua`);
-  const outputFile = path.join('uploads', `${id}_out.lua`);
+  // Dùng đường dẫn TUYỆT ĐỐI vì sắp đổi cwd khi chạy lua
+  const inputFile = path.resolve('uploads', `${id}_in.lua`);
+  const outputFile = path.resolve('uploads', `${id}_out.lua`);
+  const prometheusDir = path.resolve('obfuscator/prometheus');
 
   try {
     fs.writeFileSync(inputFile, code);
 
-    // execFileSync: tham số truyền dạng mảng, KHÔNG đi qua shell
-    // => ký tự đặc biệt (; & | ` $()) không bị diễn giải thành lệnh khác
     execFileSync(LUA_BIN, [
-      'obfuscator/prometheus/cli.lua',
+      'cli.lua',           // relative to prometheusDir vì đã set cwd
       '--preset', preset,
-      inputFile,
+      inputFile,            // absolute path, không bị ảnh hưởng bởi cwd
       outputFile
     ], {
+      cwd: prometheusDir,   // <-- QUAN TRỌNG: chạy lệnh như đang đứng trong thư mục prometheus
       timeout: 30000,
       stdio: ['ignore', 'pipe', 'pipe']
     });
