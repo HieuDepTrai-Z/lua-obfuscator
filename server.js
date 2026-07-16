@@ -7,14 +7,19 @@ const { randomUUID } = require('crypto');
 
 const app = express();
 const upload = multer({ dest: 'uploads/' });
+
 app.use(express.static('public'));
 app.use(express.json({ limit: '5mb' }));
 
+// Đổi sang lua5.1 để tương thích với Roblox/Luau
+const LUA_BIN = process.env.LUA_BIN || 'lua5.1';
+
+// Whitelist preset hợp lệ — chặn command injection
 const ALLOWED_PRESETS = ['Minify', 'Weak', 'Medium', 'Strong'];
 
 function obfuscate(code, preset = 'Medium') {
   if (!ALLOWED_PRESETS.includes(preset)) {
-    throw new Error(`Invalid preset. Allowed: ${ALLOWED_PRESETS.join(', ')}`);
+    throw new Error(`Invalid preset "${preset}". Allowed: ${ALLOWED_PRESETS.join(', ')}`);
   }
 
   const id = randomUUID();
@@ -24,20 +29,28 @@ function obfuscate(code, preset = 'Medium') {
   try {
     fs.writeFileSync(inputFile, code);
 
-    // execFileSync: tham số truyền dạng mảng, KHÔNG qua shell
-    // => ký tự đặc biệt (; & | ` $()) không bị diễn giải
-    execFileSync('lua5.3', [
+    // execFileSync: tham số truyền dạng mảng, KHÔNG đi qua shell
+    // => ký tự đặc biệt (; & | ` $()) không bị diễn giải thành lệnh khác
+    execFileSync(LUA_BIN, [
       'obfuscator/prometheus/cli.lua',
       '--preset', preset,
       inputFile,
       outputFile
-    ], { timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] });
+    ], {
+      timeout: 30000,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    if (!fs.existsSync(outputFile)) {
+      throw new Error('Obfuscator did not produce an output file');
+    }
 
     return fs.readFileSync(outputFile, 'utf8');
   } catch (e) {
-    // log stderr thật để debug thay vì message chung chung
-    const stderr = e.stderr ? e.stderr.toString() : e.message;
-    throw new Error(`Obfuscation failed: ${stderr}`);
+    const stderr = e.stderr ? e.stderr.toString().trim() : null;
+    const stdout = e.stdout ? e.stdout.toString().trim() : null;
+    const detail = stderr || stdout || e.message;
+    throw new Error(`Obfuscation failed: ${detail}`);
   } finally {
     if (fs.existsSync(inputFile)) fs.unlinkSync(inputFile);
     if (fs.existsSync(outputFile)) fs.unlinkSync(outputFile);
@@ -45,21 +58,38 @@ function obfuscate(code, preset = 'Medium') {
 }
 
 app.post('/obfuscate', upload.single('file'), (req, res) => {
+  let tempUploadPath = null;
+
   try {
     let code = '';
+
     if (req.file) {
+      tempUploadPath = req.file.path;
       code = fs.readFileSync(req.file.path, 'utf8');
       fs.unlinkSync(req.file.path);
+      tempUploadPath = null;
     } else if (req.body?.code) {
       code = req.body.code;
     } else {
       return res.status(400).json({ error: 'No code provided' });
     }
 
-    if (code.length > 500000)
+    if (typeof code !== 'string' || code.trim().length === 0) {
+      return res.status(400).json({ error: 'Code is empty' });
+    }
+
+    if (Buffer.byteLength(code, 'utf8') > 500000) {
       return res.status(400).json({ error: 'Code too large (max 500KB)' });
+    }
 
     const preset = req.body?.preset || 'Medium';
+
+    if (!ALLOWED_PRESETS.includes(preset)) {
+      return res.status(400).json({
+        error: `Invalid preset. Allowed: ${ALLOWED_PRESETS.join(', ')}`
+      });
+    }
+
     const result = obfuscate(code, preset);
 
     res.json({
@@ -69,10 +99,30 @@ app.post('/obfuscate', upload.single('file'), (req, res) => {
       obfuscatedSize: Buffer.byteLength(result, 'utf8'),
     });
   } catch (e) {
+    // dọn file tạm nếu còn sót do lỗi trước khi unlink
+    if (tempUploadPath && fs.existsSync(tempUploadPath)) {
+      fs.unlinkSync(tempUploadPath);
+    }
+    console.error('Obfuscate error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
 
+// Health check endpoint — hữu ích để verify Lua đã cài đúng chưa
+app.get('/health', (req, res) => {
+  try {
+    const version = execFileSync(LUA_BIN, ['-v'], { timeout: 5000 }).toString();
+    res.json({ status: 'ok', luaBin: LUA_BIN, luaVersion: version.trim() });
+  } catch (e) {
+    res.status(500).json({
+      status: 'error',
+      luaBin: LUA_BIN,
+      error: e.message
+    });
+  }
+});
+
 if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log('Running on port ' + PORT));
