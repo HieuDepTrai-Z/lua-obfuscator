@@ -11,18 +11,19 @@ const upload = multer({ dest: 'uploads/' });
 app.use(express.static('public'));
 app.use(express.json({ limit: '5mb' }));
 
-// Đổi sang lua5.1 để tương thích với Roblox/Luau
+// lua5.1 để tương thích với Roblox/Luau
 const LUA_BIN = process.env.LUA_BIN || 'lua5.1';
 
 // Whitelist preset hợp lệ — chặn command injection
 const ALLOWED_PRESETS = ['Minify', 'Weak', 'Medium', 'Strong'];
+
 function obfuscate(code, preset = 'Medium') {
   if (!ALLOWED_PRESETS.includes(preset)) {
     throw new Error(`Invalid preset "${preset}". Allowed: ${ALLOWED_PRESETS.join(', ')}`);
   }
 
   const id = randomUUID();
-  // Dùng đường dẫn TUYỆT ĐỐI vì sắp đổi cwd khi chạy lua
+  // Dùng đường dẫn TUYỆT ĐỐI vì sẽ đổi cwd khi chạy lua
   const inputFile = path.resolve('uploads', `${id}_in.lua`);
   const outputFile = path.resolve('uploads', `${id}_out.lua`);
   const prometheusDir = path.resolve('obfuscator/prometheus');
@@ -30,13 +31,16 @@ function obfuscate(code, preset = 'Medium') {
   try {
     fs.writeFileSync(inputFile, code);
 
+    // execFileSync: tham số dạng mảng, KHÔNG đi qua shell => an toàn khỏi command injection
+    // cwd: prometheusDir => cli.lua tự tính package.path đúng, require() các module con hoạt động
+    // --out outputFile => đúng cú pháp CLI Prometheus yêu cầu (không truyền output là positional arg tự do)
     execFileSync(LUA_BIN, [
-      'cli.lua',           // relative to prometheusDir vì đã set cwd
+      'cli.lua',
       '--preset', preset,
-      inputFile,            // absolute path, không bị ảnh hưởng bởi cwd
-      outputFile
+      inputFile,
+      '--out', outputFile
     ], {
-      cwd: prometheusDir,   // <-- QUAN TRỌNG: chạy lệnh như đang đứng trong thư mục prometheus
+      cwd: prometheusDir,
       timeout: 30000,
       stdio: ['ignore', 'pipe', 'pipe']
     });
@@ -99,7 +103,6 @@ app.post('/obfuscate', upload.single('file'), (req, res) => {
       obfuscatedSize: Buffer.byteLength(result, 'utf8'),
     });
   } catch (e) {
-    // dọn file tạm nếu còn sót do lỗi trước khi unlink
     if (tempUploadPath && fs.existsSync(tempUploadPath)) {
       fs.unlinkSync(tempUploadPath);
     }
@@ -108,7 +111,7 @@ app.post('/obfuscate', upload.single('file'), (req, res) => {
   }
 });
 
-// Health check endpoint — hữu ích để verify Lua đã cài đúng chưa
+// Health check — verify lua5.1 hoạt động đúng trên server
 app.get('/health', (req, res) => {
   try {
     const version = execFileSync(LUA_BIN, ['-v'], { timeout: 5000 }).toString();
