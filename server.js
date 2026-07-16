@@ -28,15 +28,16 @@ function obfuscate(code, preset = 'Medium') {
   const outputFile = path.resolve('uploads', `${id}_out.lua`);
   const prometheusDir = path.resolve('obfuscator/prometheus');
 
+  // Seed > 0 => Prometheus dùng RNG xác định trong Lua, KHÔNG gọi ra openssl
+  const seed = (Date.now() % 2147483647) || 1;
+
   try {
     fs.writeFileSync(inputFile, code);
 
-    // execFileSync: tham số dạng mảng, KHÔNG đi qua shell => an toàn khỏi command injection
-    // cwd: prometheusDir => cli.lua tự tính package.path đúng, require() các module con hoạt động
-    // --out outputFile => đúng cú pháp CLI Prometheus yêu cầu (không truyền output là positional arg tự do)
     execFileSync(LUA_BIN, [
       'cli.lua',
       '--preset', preset,
+      '--seed', String(seed),
       inputFile,
       '--out', outputFile
     ], {
